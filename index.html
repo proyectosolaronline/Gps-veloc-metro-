@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Velocímetro Digital GPS</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0a0f0d 0%, #1a1f1d 100%);
+      font-family: 'Segoe UI', 'Roboto', system-ui, sans-serif;
+      touch-action: pan-x pan-y;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      max-width: 500px;
+      height: auto;
+      filter: drop-shadow(0 10px 25px rgba(0,0,0,0.7));
+      border-radius: 50%;
+    }
+    .status {
+      margin-top: 25px;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      color: #ccc;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(10px);
+      padding: 12px 28px;
+      border-radius: 50px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .satellite-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #2ecc71;
+      box-shadow: 0 0 15px #2ecc71;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .dot.inactive {
+      background: #e74c3c;
+      box-shadow: 0 0 10px #e74c3c;
+    }
+    .unit-toggle {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      padding: 8px 20px;
+      border-radius: 30px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 0.9rem;
+      letter-spacing: 0.5px;
+      transition: 0.2s;
+      background: rgba(255,255,255,0.05);
+      backdrop-filter: blur(4px);
+    }
+    .unit-toggle:hover {
+      background: rgba(255,255,255,0.2);
+      border-color: white;
+    }
+    .error-message {
+      color: #ff7675;
+      text-align: center;
+      margin-top: 15px;
+      font-size: 0.9rem;
+      max-width: 300px;
+    }
+    @media (max-width: 450px) {
+      .container {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <canvas id="speedoCanvas" width="500" height="500" aria-label="Velocímetro digital con tacómetro en tiempo real GPS"></canvas>
+    
+    <div class="status">
+      <div class="satellite-indicator">
+        <span id="gpsDot" class="dot"></span>
+        <span id="gpsStatusText">Buscando señal</span>
+      </div>
+      <span id="accuracyDisplay">±0 m</span>
+      <button id="unitToggle" class="unit-toggle">km/h ⇄ mph</button>
+    </div>
+    <div id="errorMsg" class="error-message"></div>
+  </div>
+
+  <script>
+    (function() {
+      // --- Configuración ---
+      const canvas = document.getElementById('speedoCanvas');
+      const ctx = canvas.getContext('2d');
+      
+      // Dimensiones fijas para dibujo vectorial
+      const W = 500, H = 500;
+      canvas.width = W;
+      canvas.height = H;
+      const centerX = W/2, centerY = H/2;
+      const radius = 210; // radio principal del arco
+
+      // Estado de la aplicación
+      let currentSpeed = 0;        // en km/h (interna)
+      let maxSpeedReached = 60;    // para escala dinámica, mínimo 60 km/h o equivalente
+      let speedUnit = 'km/h';      // 'km/h' o 'mph'
+      let gpsAvailable = false;
+      let accuracyMeters = 0;
+      let watchId = null;
+      
+      // Referencias DOM
+      const gpsDot = document.getElementById('gpsDot');
+      const gpsStatusText = document.getElementById('gpsStatusText');
+      const accuracyDisplay = document.getElementById('accuracyDisplay');
+      const unitToggleBtn = document.getElementById('unitToggle');
+      const errorMsgDiv = document.getElementById('errorMsg');
+
+      // --- Conversiones ---
+      const KMH_TO_MPH = 0.621371;
+      const MPH_TO_KMH = 1.60934;
+
+      function getDisplaySpeed() {
+        if (speedUnit === 'mph') {
+          return currentSpeed * KMH_TO_MPH;
+        }
+        return currentSpeed;
+      }
+
+      function formatSpeed(speedValue) {
+        return speedValue < 10 ? speedValue.toFixed(1) : Math.round(speedValue);
+      }
+
+      // --- Dibujo del velocímetro ---
+      function drawGauge() {
+        ctx.clearRect(0, 0, W, H);
+        
+        const displaySpeed = getDisplaySpeed();
+        const displayMax = Math.max(60, maxSpeedReached * 1.15); // escala dinámica con margen
+        
+        // Ajustar máximo visual: siempre al menos 60 en la unidad activa.
+        let scaleMax = speedUnit === 'mph' ? Math.max(60, displayMax) : Math.max(60, displayMax);
+        // Redondear hacia arriba para marcas bonitas
+        scaleMax = Math.ceil(scaleMax / 10) * 10;
+        if (scaleMax < 60) scaleMax = 60;
+        
+        // Arco de fondo y marcas
+        const startAngle = Math.PI * 0.75;   // 135 grados
+        const endAngle = Math.PI * 2.25;      // 405 grados (arco de 270°)
+        
+        // Arco exterior decorativo
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+        ctx.strokeStyle = '#2c3e50';
+        ctx.lineWidth = 24;
+        ctx.stroke();
+        
+        // Arco interior con gradiente
+        const gradient = ctx.createLinearGradient(0, 0, W, H);
+        gradient.addColorStop(0, '#0f2027');
+        gradient.addColorStop(0.5, '#203a43');
+        gradient.addColorStop(1, '#2c5364');
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = 18;
+        ctx.stroke();
+        
+        // Marcas de velocidad
+        const totalAngle = endAngle - startAngle;
+        const stepCount = 12; // Número de marcas principales
+        const minorStepCount = 5; // subdivisiones entre principales
+        
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.font = 'bold 13px "Segoe UI", "Roboto"';
+        ctx.fillStyle = '#ecf0f1';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        for (let i = 0; i <= stepCount; i++) {
+          const fraction = i / stepCount;
+          const angle = startAngle + fraction * totalAngle;
+          const value = (fraction * scaleMax);
+          
+          const innerRadius = radius - 24;
+          const outerRadius = radius + 5;
+          const x1 = Math.cos(angle) * innerRadius;
+          const y1 = Math.sin(angle) * innerRadius;
+          const x2 = Math.cos(angle) * outerRadius;
+          const y2 = Math.sin(angle) * outerRadius;
+          
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.strokeStyle = '#bdc3c7';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          
+          // Texto de la marca
+          const textRadius = radius - 42;
+          const textX = Math.cos(angle) * textRadius;
+          const textY = Math.sin(angle) * textRadius;
+          ctx.fillText(Math.round(value), textX, textY);
+          
+          // Submarcas menores
+          if (i < stepCount) {
+            for (let j = 1; j < minorStepCount; j++) {
+              const subFraction = fraction + (j / minorStepCount) * (1/stepCount);
+              const subAngle = startAngle + subFraction * totalAngle;
+              const subInner = radius - 18;
+              const subOuter = radius - 5;
+              const sx1 = Math.cos(subAngle) * subInner;
+              const sy1 = Math.sin(subAngle) * subInner;
+              const sx2 = Math.cos(subAngle) * subOuter;
+              const sy2 = Math.sin(subAngle) * subOuter;
+              
+              ctx.beginPath();
+              ctx.moveTo(sx1, sy1);
+              ctx.lineTo(sx2, sy2);
+              ctx.strokeStyle = '#7f8c8d';
+              ctx.lineWidth = 1.2;
+              ctx.stroke();
+            }
+          }
+        }
+        ctx.restore();
+        
+        // Aguja (indicador de velocidad)
+        const speedFraction = Math.min(displaySpeed / scaleMax, 1.0);
+        const needleAngle = startAngle + speedFraction * totalAngle;
+        
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(needleAngle);
+        
+        // Sombra para la aguja
+        ctx.shadowColor = 'rgba(231, 76, 60, 0.8)';
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.moveTo(-8, 8);
+        ctx.lineTo(0, -radius + 25);
+        ctx.lineTo(8, 8);
+        ctx.closePath();
+        ctx.fillStyle = '#e74c3c';
+        ctx.fill();
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        
+        // Centro metálico
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, 0, 2 * Math.PI);
+        ctx.fillStyle = '#2c3e50';
+        ctx.fill();
+        ctx.strokeStyle = '#ecf0f1';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = '#e67e22';
+        ctx.fill();
+        ctx.restore();
+        
+        // Número central grande con unidad
+        ctx.font = 'bold 72px "Segoe UI", "Roboto"';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#00000080';
+        ctx.shadowBlur = 20;
+        ctx.fillText(formatSpeed(displaySpeed), centerX, centerY - 20);
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        
+        ctx.font = 'bold 26px "Segoe UI", "Roboto"';
+        ctx.fillStyle = '#bdc3c7';
+        ctx.fillText(speedUnit, centerX, centerY + 55);
+        
+        // Texto "km/h" o "mph" pequeño adicional no es necesario
+        
+        // Brillo decorativo
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius+5, startAngle, endAngle);
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // --- Actualizar máximo dinámico ---
+      function updateMaxSpeed(speedKmh) {
+        if (speedKmh > maxSpeedReached) {
+          maxSpeedReached = speedKmh;
+        }
+        // Reducir lentamente si la velocidad es baja? No, mantenemos pico para mejor visual.
+        // Pero se reinicia si la velocidad actual es mucho menor? Mejor mantener el pico de la sesión.
+      }
+
+      // --- GPS Handling ---
+      function handlePosition(position) {
+        const speedMps = position.coords.speed; // metros por segundo, null si no disponible
+        accuracyMeters = position.coords.accuracy;
+        
+        if (speedMps !== null && !isNaN(speedMps) && speedMps >= 0) {
+          // Convertir m/s a km/h
+          const speedKmh = speedMps * 3.6;
+          currentSpeed = speedKmh;
+          updateMaxSpeed(speedKmh);
+          
+          gpsAvailable = true;
+          gpsDot.className = 'dot';
+          gpsStatusText.textContent = 'GPS activo';
+          errorMsgDiv.textContent = '';
+        } else {
+          // Si la velocidad es null pero tenemos fix, mostramos 0.
+          if (position.coords.speed === null) {
+            currentSpeed = 0;
+            gpsAvailable = true;
+            gpsDot.className = 'dot';
+            gpsStatusText.textContent = 'Señal (velocidad no disponible)';
+          }
+        }
+        
+        accuracyDisplay.textContent = `±${Math.round(accuracyMeters)} m`;
+        drawGauge();
+      }
+
+      function handleError(error) {
+        gpsAvailable = false;
+        gpsDot.className = 'dot inactive';
+        gpsStatusText.textContent = 'Sin GPS';
+        accuracyDisplay.textContent = '---';
+        
+        let message = '';
+        switch(error.code) {
+          case error.PERMISSION_DENIED:
+            message = 'Permiso de ubicación denegado. Activa el GPS y los permisos.';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            message = 'Información de ubicación no disponible.';
+            break;
+          case error.TIMEOUT:
+            message = 'Tiempo de espera agotado. Intenta moverte a un área abierta.';
+            break;
+          default:
+            message = 'Error desconocido al obtener ubicación.';
+        }
+        errorMsgDiv.textContent = message;
+        drawGauge(); // Redibuja aunque sin cambios
+      }
+
+      function startGPS() {
+        if (!navigator.geolocation) {
+          errorMsgDiv.textContent = 'Geolocalización no soportada en este navegador.';
+          gpsDot.className = 'dot inactive';
+          gpsStatusText.textContent = 'No soportado';
+          return;
+        }
+        
+        // Opciones de alta precisión
+        const options = {
+          enableHighAccuracy: true,
+          maximumAge: 1000,       // no usar caché viejo
+          timeout: 10000
+        };
+        
+        // Limpiar watch previo si existe
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+        
+        watchId = navigator.geolocation.watchPosition(
+          handlePosition,
+          handleError,
+          options
+        );
+      }
+
+      // Cambio de unidades
+      function toggleUnit() {
+        if (speedUnit === 'km/h') {
+          speedUnit = 'mph';
+          unitToggleBtn.textContent = 'mph ⇄ km/h';
+        } else {
+          speedUnit = 'km/h';
+          unitToggleBtn.textContent = 'km/h ⇄ mph';
+        }
+        // Al cambiar unidad ajustamos maxSpeedReached para que se muestre correctamente?
+        // Mejor reiniciar el máximo visual para evitar escalas extrañas.
+        // Pero mantenemos la velocidad interna en km/h; solo reiniciamos maxSpeedReached para que se adapte.
+        maxSpeedReached = currentSpeed; // resetea el pico al valor actual para reescalar
+        drawGauge();
+      }
+
+      // Inicializar eventos y arranque
+      function init() {
+        unitToggleBtn.addEventListener('click', toggleUnit);
+        
+        // Dibujo inicial (velocidad 0)
+        drawGauge();
+        
+        // Iniciar GPS
+        startGPS();
+        
+        // Manejar visibilidad para ahorrar batería (opcional)
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden) {
+            // Podríamos limpiar el watch pero mejor dejarlo para experiencia continua.
+            // No detenemos.
+          }
+        });
+      }
+
+      // Arrancar cuando la página esté lista
+      window.addEventListener('load', init);
+      
+      // Limpieza opcional al salir (buena práctica)
+      window.addEventListener('beforeunload', () => {
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+      });
+    })();
+  </script>
+</body>
+</html>
