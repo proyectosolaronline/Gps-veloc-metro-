@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Velocímetro Digital GPS con Localidad</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0a0f0d 0%, #1a1f1d 100%);
+      font-family: 'Segoe UI', 'Roboto', system-ui, sans-serif;
+      touch-action: pan-x pan-y;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      width: 100%;
+      max-width: 550px;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      max-width: 500px;
+      height: auto;
+      filter: drop-shadow(0 10px 25px rgba(0,0,0,0.7));
+      border-radius: 50%;
+    }
+    .info-panel {
+      width: 100%;
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+    .location-box {
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(12px);
+      padding: 14px 20px;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #ecf0f1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
+    .location-icon {
+      font-size: 1.8rem;
+      filter: drop-shadow(0 0 6px #3498db);
+    }
+    .location-text {
+      flex: 1;
+      font-size: 1rem;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .coordinates {
+      font-size: 0.8rem;
+      color: #95a5a6;
+      margin-top: 2px;
+    }
+    .status {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      color: #ccc;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(10px);
+      padding: 12px 28px;
+      border-radius: 50px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .satellite-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #2ecc71;
+      box-shadow: 0 0 15px #2ecc71;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .dot.inactive {
+      background: #e74c3c;
+      box-shadow: 0 0 10px #e74c3c;
+    }
+    .unit-toggle {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      padding: 8px 20px;
+      border-radius: 30px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 0.9rem;
+      letter-spacing: 0.5px;
+      transition: 0.2s;
+      background: rgba(255,255,255,0.05);
+      backdrop-filter: blur(4px);
+    }
+    .unit-toggle:hover {
+      background: rgba(255,255,255,0.2);
+      border-color: white;
+    }
+    .error-message {
+      color: #ff7675;
+      text-align: center;
+      font-size: 0.85rem;
+      background: rgba(231,76,60,0.1);
+      padding: 8px 15px;
+      border-radius: 20px;
+    }
+    @media (max-width: 450px) {
+      .container {
+        padding: 10px;
+      }
+      .location-text {
+        font-size: 0.9rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <canvas id="speedoCanvas" width="500" height="500" aria-label="Velocímetro digital con tacómetro en tiempo real GPS"></canvas>
+    
+    <div class="info-panel">
+      <!-- Nueva caja de localidad -->
+      <div class="location-box">
+        <span class="location-icon">📍</span>
+        <div>
+          <div class="location-text" id="locationDisplay">Obteniendo ubicación...</div>
+          <div class="coordinates" id="coordsDisplay"></div>
+        </div>
+      </div>
+      
+      <div class="status">
+        <div class="satellite-indicator">
+          <span id="gpsDot" class="dot"></span>
+          <span id="gpsStatusText">Buscando señal</span>
+        </div>
+        <span id="accuracyDisplay">±0 m</span>
+        <button id="unitToggle" class="unit-toggle">km/h ⇄ mph</button>
+      </div>
+      <div id="errorMsg" class="error-message"></div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      // --- Configuración ---
+      const canvas = document.getElementById('speedoCanvas');
+      const ctx = canvas.getContext('2d');
+      
+      const W = 500, H = 500;
+      canvas.width = W;
+      canvas.height = H;
+      const centerX = W/2, centerY = H/2;
+      const radius = 210;
+
+      // Estado
+      let currentSpeed = 0;
+      let maxSpeedReached = 60;
+      let speedUnit = 'km/h';
+      let gpsAvailable = false;
+      let accuracyMeters = 0;
+      let watchId = null;
+      let lastLatitude = null;
+      let lastLongitude = null;
+      let geocodingTimeout = null;
+      
+      // Referencias DOM
+      const gpsDot = document.getElementById('gpsDot');
+      const gpsStatusText = document.getElementById('gpsStatusText');
+      const accuracyDisplay = document.getElementById('accuracyDisplay');
+      const unitToggleBtn = document.getElementById('unitToggle');
+      const errorMsgDiv = document.getElementById('errorMsg');
+      const locationDisplay = document.getElementById('locationDisplay');
+      const coordsDisplay = document.getElementById('coordsDisplay');
+
+      // Conversiones
+      const KMH_TO_MPH = 0.621371;
+
+      function getDisplaySpeed() {
+        return speedUnit === 'mph' ? currentSpeed * KMH_TO_MPH : currentSpeed;
+      }
+
+      function formatSpeed(speedValue) {
+        return speedValue < 10 ? speedValue.toFixed(1) : Math.round(speedValue);
+      }
+
+      // --- Geocodificación inversa (usando Nominatim de OpenStreetMap) ---
+      async function fetchLocationName(lat, lon) {
+        try {
+          // Respetar límite de uso de Nominatim (máx 1 petición por segundo)
+          const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=16&addressdetails=1&accept-language=es`;
+          
+          const response = await fetch(url, {
+            headers: {
+              'User-Agent': 'VelocimetroGPS/1.0 (tu-email@ejemplo.com)' // Identificación requerida por Nominatim
+            }
+          });
+          
+          if (!response.ok) throw new Error('Error en la petición');
+          
+          const data = await response.json();
+          
+          if (data && data.address) {
+            const addr = data.address;
+            
+            // Construir dirección descriptiva en español
+            let locationParts = [];
+            
+            // Carretera / calle
+            if (addr.road) locationParts.push(addr.road);
+            else if (addr.pedestrian) locationParts.push(addr.pedestrian);
+            else if (addr.path) locationParts.push(addr.path);
+            
+            // Número
+            if (addr.house_number) locationParts[locationParts.length-1] += ' ' + addr.house_number;
+            
+            // Barrio o colonia
+            if (addr.suburb) locationParts.push(addr.suburb);
+            else if (addr.neighbourhood) locationParts.push(addr.neighbourhood);
+            else if (addr.district) locationParts.push(addr.district);
+            
+            // Ciudad/pueblo
+            if (addr.city) locationParts.push(addr.city);
+            else if (addr.town) locationParts.push(addr.town);
+            else if (addr.village) locationParts.push(addr.village);
+            else if (addr.municipality) locationParts.push(addr.municipality);
+            
+            // Estado/provincia
+            if (addr.state) locationParts.push(addr.state);
+            else if (addr.region) locationParts.push(addr.region);
+            
+            // País (si no es el único dato)
+            if (addr.country && locationParts.length > 0) {
+              locationParts.push(addr.country);
+            } else if (addr.country) {
+              locationParts.push(addr.country);
+            }
+            
+            const locationString = locationParts.join(', ') || 'Ubicación desconocida';
+            locationDisplay.textContent = locationString;
+          } else if (data && data.display_name) {
+            locationDisplay.textContent = data.display_name;
+          } else {
+            locationDisplay.textContent = 'Sin datos de dirección';
+          }
+        } catch (error) {
+          console.warn('Error en geocodificación:', error);
+          locationDisplay.textContent = 'Error al obtener dirección';
+        }
+      }
+
+      function updateLocation(lat, lon) {
+        // Actualizar coordenadas visibles
+        coordsDisplay.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+        
+        // Evitar múltiples llamadas simultáneas (debounce)
+        if (geocodingTimeout) clearTimeout(geocodingTimeout);
+        
+        // Solo actualizar si cambió significativamente (más de 50 metros aprox)
+        const latChanged = lastLatitude === null || Math.abs(lat - lastLatitude) > 0.0005;
+        const lonChanged = lastLongitude === null || Math.abs(lon - lastLongitude) > 0.0005;
+        
+        if (latChanged || lonChanged) {
+          lastLatitude = lat;
+          lastLongitude = lon;
+          
+          // Debounce de 2 segundos para no sobrecargar la API
+          geocodingTimeout = setTimeout(() => {
+            fetchLocationName(lat, lon);
+          }, 2000);
+        }
+      }
+
+      // --- Dibujo del velocímetro (sin cambios mayores) ---
+      function drawGauge() {
+        ctx.clearRect(0, 0, W, H);
+        
+        const displaySpeed = getDisplaySpeed();
+        const displayMax = Math.max(60, maxSpeedReached * 1.15);
+        let scaleMax = speedUnit === 'mph' ? Math.max(60, displayMax) : Math.max(60, displayMax);
+        scaleMax = Math.ceil(scaleMax / 10) * 10;
+        if (scaleMax < 60) scaleMax = 60;
+        
+        const startAngle = Math.PI * 0.75;
+        const endAngle = Math.PI * 2.25;
+        
+        // Arco exterior
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+        ctx.strokeStyle = '#2c3e50';
+        ctx.lineWidth = 24;
+        ctx.stroke();
+        
+        // Arco interior con gradiente
+        const gradient = ctx.createLinearGradient(0, 0, W, H);
+        gradient.addColorStop(0, '#0f2027');
+        gradient.addColorStop(0.5, '#203a43');
+        gradient.addColorStop(1, '#2c5364');
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = 18;
+        ctx.stroke();
+        
+        // Marcas
+        const totalAngle = endAngle - startAngle;
+        const stepCount = 12;
+        const minorStepCount = 5;
+        
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.font = 'bold 13px "Segoe UI", "Roboto"';
+        ctx.fillStyle = '#ecf0f1';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        for (let i = 0; i <= stepCount; i++) {
+          const fraction = i / stepCount;
+          const angle = startAngle + fraction * totalAngle;
+          const value = (fraction * scaleMax);
+          
+          const innerRadius = radius - 24;
+          const outerRadius = radius + 5;
+          const x1 = Math.cos(angle) * innerRadius;
+          const y1 = Math.sin(angle) * innerRadius;
+          const x2 = Math.cos(angle) * outerRadius;
+          const y2 = Math.sin(angle) * outerRadius;
+          
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.strokeStyle = '#bdc3c7';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          
+          const textRadius = radius - 42;
+          const textX = Math.cos(angle) * textRadius;
+          const textY = Math.sin(angle) * textRadius;
+          ctx.fillText(Math.round(value), textX, textY);
+          
+          if (i < stepCount) {
+            for (let j = 1; j < minorStepCount; j++) {
+              const subFraction = fraction + (j / minorStepCount) * (1/stepCount);
+              const subAngle = startAngle + subFraction * totalAngle;
+              const subInner = radius - 18;
+              const subOuter = radius - 5;
+              const sx1 = Math.cos(subAngle) * subInner;
+              const sy1 = Math.sin(subAngle) * subInner;
+              const sx2 = Math.cos(subAngle) * subOuter;
+              const sy2 = Math.sin(subAngle) * subOuter;
+              
+              ctx.beginPath();
+              ctx.moveTo(sx1, sy1);
+              ctx.lineTo(sx2, sy2);
+              ctx.strokeStyle = '#7f8c8d';
+              ctx.lineWidth = 1.2;
+              ctx.stroke();
+            }
+          }
+        }
+        ctx.restore();
+        
+        // Aguja
+        const speedFraction = Math.min(displaySpeed / scaleMax, 1.0);
+        const needleAngle = startAngle + speedFraction * totalAngle;
+        
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(needleAngle);
+        
+        ctx.shadowColor = 'rgba(231, 76, 60, 0.8)';
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.moveTo(-8, 8);
+        ctx.lineTo(0, -radius + 25);
+        ctx.lineTo(8, 8);
+        ctx.closePath();
+        ctx.fillStyle = '#e74c3c';
+        ctx.fill();
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, 0, 2 * Math.PI);
+        ctx.fillStyle = '#2c3e50';
+        ctx.fill();
+        ctx.strokeStyle = '#ecf0f1';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = '#e67e22';
+        ctx.fill();
+        ctx.restore();
+        
+        // Número central
+        ctx.font = 'bold 72px "Segoe UI", "Roboto"';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#00000080';
+        ctx.shadowBlur = 20;
+        ctx.fillText(formatSpeed(displaySpeed), centerX, centerY - 20);
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        
+        ctx.font = 'bold 26px "Segoe UI", "Roboto"';
+        ctx.fillStyle = '#bdc3c7';
+        ctx.fillText(speedUnit, centerX, centerY + 55);
+        
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius+5, startAngle, endAngle);
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      function updateMaxSpeed(speedKmh) {
+        if (speedKmh > maxSpeedReached) {
+          maxSpeedReached = speedKmh;
+        }
+      }
+
+      // --- GPS Handling actualizado ---
+      function handlePosition(position) {
+        const speedMps = position.coords.speed;
+        accuracyMeters = position.coords.accuracy;
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        
+        // Actualizar localización siempre que tengamos coordenadas
+        if (lat && lon) {
+          updateLocation(lat, lon);
+        }
+        
+        if (speedMps !== null && !isNaN(speedMps) && speedMps >= 0) {
+          const speedKmh = speedMps * 3.6;
+          currentSpeed = speedKmh;
+          updateMaxSpeed(speedKmh);
+          
+          gpsAvailable = true;
+          gpsDot.className = 'dot';
+          gpsStatusText.textContent = 'GPS activo';
+          errorMsgDiv.textContent = '';
+        } else {
+          if (position.coords.speed === null && lat && lon) {
+            currentSpeed = 0;
+            gpsAvailable = true;
+            gpsDot.className = 'dot';
+            gpsStatusText.textContent = 'Señal (sin velocidad)';
+          }
+        }
+        
+        accuracyDisplay.textContent = `±${Math.round(accuracyMeters)} m`;
+        drawGauge();
+      }
+
+      function handleError(error) {
+        gpsAvailable = false;
+        gpsDot.className = 'dot inactive';
+        gpsStatusText.textContent = 'Sin GPS';
+        accuracyDisplay.textContent = '---';
+        locationDisplay.textContent = 'Ubicación no disponible';
+        coordsDisplay.textContent = '';
+        
+        let message = '';
+        switch(error.code) {
+          case error.PERMISSION_DENIED:
+            message = 'Permiso de ubicación denegado. Activa el GPS.';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            message = 'Información de ubicación no disponible.';
+            break;
+          case error.TIMEOUT:
+            message = 'Tiempo de espera agotado.';
+            break;
+          default:
+            message = 'Error desconocido al obtener ubicación.';
+        }
+        errorMsgDiv.textContent = message;
+        drawGauge();
+      }
+
+      function startGPS() {
+        if (!navigator.geolocation) {
+          errorMsgDiv.textContent = 'Geolocalización no soportada.';
+          gpsDot.className = 'dot inactive';
+          gpsStatusText.textContent = 'No soportado';
+          return;
+        }
+        
+        const options = {
+          enableHighAccuracy: true,
+          maximumAge: 1000,
+          timeout: 10000
+        };
+        
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+        
+        watchId = navigator.geolocation.watchPosition(
+          handlePosition,
+          handleError,
+          options
+        );
+      }
+
+      function toggleUnit() {
+        if (speedUnit === 'km/h') {
+          speedUnit = 'mph';
+          unitToggleBtn.textContent = 'mph ⇄ km/h';
+        } else {
+          speedUnit = 'km/h';
+          unitToggleBtn.textContent = 'km/h ⇄ mph';
+        }
+        maxSpeedReached = currentSpeed;
+        drawGauge();
+      }
+
+      function init() {
+        unitToggleBtn.addEventListener('click', toggleUnit);
+        drawGauge();
+        startGPS();
+        
+        document.addEventListener('visibilitychange', () => {
+          // Mantener activo
+        });
+      }
+
+      window.addEventListener('load', init);
+      
+      window.addEventListener('beforeunload', () => {
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+        if (geocodingTimeout) clearTimeout(geocodingTimeout);
+      });
+    })();
+  </script>
+</body>
+</html>
