@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>TransportSafe GPS — Satélite</title>
+  
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --v: #00e5b0;
+      --v2: #00c49a;
+      --rd: #ff4d6d;
+      --am: #ffc107;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #000;
+      height: 100vh;
+      overflow: hidden;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    /* ========== MAPA FULLSCREEN ========== */
+    #map {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    /* ========== HUD ========== */
+    .hud {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* ========== MODO VERTICAL ========== */
+    .modo-vertical { display: flex; }
+    .modo-horizontal { display: none; }
+
+    @media (orientation: landscape) {
+      .modo-vertical { display: none; }
+      .modo-horizontal { display: flex; }
+    }
+
+    /* ========== TACÓMETRO CIRCULAR (VERTICAL) ========== */
+    .tacho-circular-wrap {
+      display: flex;
+      justify-content: center;
+      padding-top: 10px;
+      pointer-events: auto;
+    }
+
+    .tacho-circular-box {
+      position: relative;
+      width: 200px;
+      height: 200px;
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 200px;
+      height: 200px;
+    }
+
+    /* ========== TACÓMETRO DIGITAL (HORIZONTAL) ========== */
+    .tacho-digital-wrap {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 6px 0;
+      pointer-events: auto;
+    }
+
+    .tacho-digital-box {
+      background: rgba(10, 15, 20, 0.4);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 18px;
+      padding: 8px 24px;
+      text-align: center;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .tacho-digital-num {
+      font-family: 'Syne', sans-serif;
+      font-size: 3rem;
+      font-weight: 800;
+      color: #fff;
+      text-shadow: 0 0 20px rgba(0, 229, 176, 0.5);
+      line-height: 1;
+      letter-spacing: -1px;
+      transition: color 0.3s, text-shadow 0.3s;
+    }
+
+    .tacho-digital-num.warn {
+      color: #ffc107;
+      text-shadow: 0 0 20px rgba(255, 193, 7, 0.6);
+    }
+
+    .tacho-digital-num.danger {
+      color: #ff4d6d;
+      text-shadow: 0 0 25px rgba(255, 77, 109, 0.8);
+      animation: pulseDanger 0.7s infinite;
+    }
+
+    @keyframes pulseDanger {
+      0%,100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
+
+    .tacho-digital-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .tacho-digital-unit {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #b0bec5;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    .tacho-digital-gps {
+      font-size: 0.55rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      color: #00e5b0;
+    }
+
+    .tacho-digital-gps.off {
+      color: #ff4d6d;
+    }
+
+    .tacho-digital-limit {
+      font-size: 0.5rem;
+      color: rgba(255,255,255,0.4);
+      margin-top: 2px;
+    }
+
+    /* ========== ALERTAS ========== */
+    .alerts-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      pointer-events: auto;
+      padding: 0 10px;
+    }
+
+    .alert-msg {
+      background: rgba(255, 77, 109, 0.5);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 5px 16px;
+      border-radius: 20px;
+      color: #fff;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-align: center;
+      display: none;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+
+    .alert-msg.show {
+      display: block;
+      animation: bounceIn 0.35s ease;
+    }
+
+    .alert-msg.stop {
+      background: rgba(255, 193, 7, 0.5);
+    }
+
+    @keyframes bounceIn {
+      0% { transform: scale(0.8); opacity: 0; }
+      60% { transform: scale(1.05); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    /* ========== PANEL COMUNICACIÓN ========== */
+    .comm-panel {
+      position: fixed;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 25;
+      pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    @media (orientation: landscape) {
+      .comm-panel {
+        right: 6px;
+        gap: 5px;
+      }
+    }
+
+    .comm-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 1.5px solid rgba(255, 255, 255, 0.2);
+      cursor: pointer;
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
+      position: relative;
+    }
+
+    .comm-btn:active { transform: scale(0.9); }
+    .comm-btn.family { background: rgba(46, 204, 113, 0.4); }
+    .comm-btn.empresa { background: rgba(52, 152, 219, 0.4); }
+    .comm-btn.emergencia {
+      background: rgba(255, 77, 109, 0.45);
+      animation: sosPulse 2.2s infinite;
+    }
+
+    @keyframes sosPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 109, 0.5); }
+      50% { box-shadow: 0 0 0 10px rgba(255, 77, 109, 0); }
+    }
+
+    .comm-label {
+      position: absolute;
+      right: 48px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 0.55rem;
+      font-weight: 600;
+      white-space: nowrap;
+      pointer-events: none;
+      backdrop-filter: blur(6px);
+    }
+
+    /* ========== BOTÓN QR ========== */
+    .qr-float {
+      position: fixed;
+      bottom: 18px;
+      right: 12px;
+      z-index: 25;
+      pointer-events: auto;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(142, 68, 173, 0.45);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1.5px solid rgba(255, 255, 255, 0.2);
+      cursor: pointer;
+      font-size: 1.2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 16px rgba(142, 68, 173, 0.4);
+      animation: floatUp 3s ease-in-out infinite;
+    }
+
+    @keyframes floatUp {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-5px); }
+    }
+
+    /* ========== PIE DE PÁGINA ========== */
+    .footer-loc {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      z-index: 10;
+      pointer-events: none;
+      padding: 0 0 6px 0;
+    }
+
+    .footer-txt {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 5px 55px 5px 12px;
+    }
+
+    .calle-name {
+      font-family: 'Syne', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: #fff;
+      text-shadow: 0 0 12px rgba(0,0,0,0.95), 0 1px 4px rgba(0,0,0,0.9), 0 2px 6px rgba(0,0,0,0.7);
+      text-align: center;
+      line-height: 1.3;
+      letter-spacing: 0.3px;
+    }
+
+    .coord-name {
+      font-size: 0.58rem;
+      color: #eee;
+      font-family: 'Courier New', monospace;
+      text-shadow: 0 0 8px rgba(0,0,0,0.95), 0 1px 3px rgba(0,0,0,0.8);
+      margin-top: 2px;
+      letter-spacing: 0.2px;
+    }
+
+    @media (orientation: landscape) {
+      .calle-name {
+        font-size: 0.7rem;
+      }
+      .coord-name {
+        font-size: 0.52rem;
+      }
+    }
+
+    /* ========== MODAL QR ========== */
+    .qr-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .qr-overlay.show { display: flex; }
+
+    .qr-modal {
+      background: rgba(26, 35, 45, 0.9);
+      backdrop-filter: blur(20px);
+      border-radius: 20px;
+      padding: 20px;
+      text-align: center;
+      color: #fff;
+      border: 1.5px solid rgba(142, 68, 173, 0.5);
+      width: 90%;
+      max-width: 300px;
+    }
+
+    .qr-box {
+      background: #fff;
+      padding: 8px;
+      border-radius: 10px;
+      display: inline-block;
+      margin: 8px 0;
+    }
+
+    .qr-actions {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 6px;
+    }
+
+    .qr-btn {
+      background: rgba(142, 68, 173, 0.6);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 16px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.68rem;
+    }
+
+    /* ========== MODAL WHATSAPP ========== */
+    .wa-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.93);
+      z-index: 90;
+      display: none;
+      flex-direction: column;
+    }
+
+    .wa-overlay.show { display: flex; }
+
+    .wa-header {
+      background: #075e54;
+      color: #fff;
+      padding: 10px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+
+    .wa-header button {
+      background: #e74c3c;
+      border: none;
+      color: #fff;
+      padding: 5px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.7rem;
+    }
+
+    .wa-frame {
+      flex: 1;
+      width: 100%;
+      border: none;
+    }
+
+    /* ========== BOTONES SUPERIORES ========== */
+    .top-btns {
+      position: fixed;
+      top: 6px;
+      right: 6px;
+      z-index: 20;
+      pointer-events: auto;
+      display: flex;
+      gap: 3px;
+    }
+
+    .top-btn {
+      background: rgba(0,0,0,0.3);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #fff;
+      padding: 4px 9px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 0.58rem;
+      font-weight: 600;
+      font-family: 'DM Sans', sans-serif;
+    }
+
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 380px) {
+      .tacho-circular-box {
+        width: 160px;
+        height: 160px;
+      }
+      canvas {
+        width: 160px;
+        height: 160px;
+      }
+    }
+
+    @media (orientation: landscape) {
+      .tacho-digital-num {
+        font-size: 2.4rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ========== MAPA SATÉLITE ========== -->
+  <div id="map"></div>
+
+  <!-- ========== HUD ========== -->
+  <div class="hud">
+    
+    <!-- MODO VERTICAL: Tacómetro Circular -->
+    <div class="modo-vertical" style="flex-direction:column;align-items:center;">
+      <div class="tacho-circular-wrap">
+        <div class="tacho-circular-box">
+          <canvas id="tachoCanvasV" width="200" height="200"></canvas>
+        </div>
+      </div>
+      <div class="alerts-area" style="margin-top:4px;">
+        <div class="alert-msg" id="speedAlertV">🚨 EXCESO DE VELOCIDAD</div>
+        <div class="alert-msg stop" id="stopAlertV">⏰ VEHÍCULO DETENIDO</div>
+      </div>
+    </div>
+
+    <!-- MODO HORIZONTAL: Tacómetro Digital -->
+    <div class="modo-horizontal" style="flex-direction:column;align-items:center;">
+      <div class="tacho-digital-wrap">
+        <div class="tacho-digital-box">
+          <div>
+            <div class="tacho-digital-num" id="speedDisplayH">0</div>
+          </div>
+          <div class="tacho-digital-info">
+            <div class="tacho-digital-unit" id="unitDisplayH">km/h</div>
+            <div class="tacho-digital-gps" id="gpsStatusH">● GPS ACTIVO</div>
+            <div class="tacho-digital-limit">MAX 80</div>
+          </div>
+        </div>
+      </div>
+      <div class="alerts-area" style="margin-top:3px;">
+        <div class="alert-msg" id="speedAlertH">🚨 EXCESO DE VELOCIDAD</div>
+        <div class="alert-msg stop" id="stopAlertH">⏰ VEHÍCULO DETENIDO</div>
+      </div>
+    </div>
+
+    <!-- Pie de página -->
+    <div class="footer-loc">
+      <div class="footer-txt">
+        <div class="calle-name" id="streetDisplay">Obteniendo ubicación GPS...</div>
+        <div class="coord-name" id="coordDisplay"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== PANEL COMUNICACIÓN ========== -->
+  <div class="comm-panel">
+    <button class="comm-btn family" id="btnFamily" title="Familia">
+      👨‍👩‍👧‍👦
+      <span class="comm-label">Familia</span>
+    </button>
+    <button class="comm-btn empresa" id="btnEmpresa" title="Empresa">
+      🏢
+      <span class="comm-label">Empresa</span>
+    </button>
+    <button class="comm-btn emergencia" id="btnEmergencia" title="Emergencia">
+      🆘
+      <span class="comm-label">Emergencia</span>
+    </button>
+  </div>
+
+  <!-- ========== BOTÓN QR ========== -->
+  <button class="qr-float" id="btnQR" title="Compartir">📱</button>
+
+  <!-- ========== BOTONES SUPERIORES ========== -->
+  <div class="top-btns">
+    <button class="top-btn" id="btnUnit">km/h ⇄ mph</button>
+    <button class="top-btn" id="btnCenter">📍</button>
+  </div>
+
+  <!-- ========== MODAL QR ========== -->
+  <div class="qr-overlay" id="qrOverlay">
+    <div class="qr-modal">
+      <h3 style="font-family:'Syne',sans-serif;">📱 Escanea</h3>
+      <div class="qr-box" id="qrCode"></div>
+      <p style="font-size:0.7rem;color:#b0bec5;" id="qrCoords"></p>
+      <div class="qr-actions">
+        <button class="qr-btn" id="btnShareWA">💬 WhatsApp</button>
+        <button class="qr-btn" id="btnShareSMS">📱 SMS</button>
+        <button class="qr-btn" id="btnCloseQR" style="background:rgba(255,77,109,0.5);">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== MODAL WHATSAPP ========== -->
+  <div class="wa-overlay" id="waOverlay">
+    <div class="wa-header">
+      <span>💬 WhatsApp</span>
+      <button id="btnCloseWA">✕ Cerrar</button>
+    </div>
+    <iframe class="wa-frame" id="waFrame"></iframe>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    (function() {
+      // ============ CONFIG ============
+      const CONFIG = {
+        maxSpeed: 80,
+        stopMinutes: 10,
+        familiaPhone: '+521234567890',
+        empresaPhone: '+521234567891',
+        emergenciaPhone: '911'
+      };
+
+      // ============ ESTADO ============
+      let currentSpeed = 0;
+      let speedUnit = 'km/h';
+      let gpsOk = false;
+      let lastPosition = null;
+      let pathHistory = [];
+      let stopStart = null;
+      let stopSent = false;
+      let speedAlertActive = false;
+      let maxSpeedReached = 80;
+
+      // ============ CANVAS TACÓMETRO CIRCULAR ============
+      const canvasV = document.getElementById('tachoCanvasV');
+      const ctxV = canvasV.getContext('2d');
+      const W = 200, H = 200;
+      const cx = W / 2, cy = H / 2;
+      const radio = 86;
+
+      function dibujarTacometroCircular() {
+        ctxV.clearRect(0, 0, W, H);
+        
+        const dispSpeed = speedUnit === 'km/h' ? currentSpeed : currentSpeed * 0.621371;
+        const limit = speedUnit === 'km/h' ? CONFIG.maxSpeed : CONFIG.maxSpeed * 0.621371;
+        let escalaMax = Math.max(limit + 30, Math.ceil(maxSpeedReached * 1.2 / 10) * 10);
+        if (escalaMax < limit + 20) escalaMax = limit + 30;
+
+        const angInicio = Math.PI * 0.7;
+        const angFin = Math.PI * 2.3;
+        const angTotal = angFin - angInicio;
+        const velFrac = Math.min(dispSpeed / escalaMax, 1.0);
+        const angVel = angInicio + velFrac * angTotal;
+
+        // Fondo glass
+        ctxV.beginPath();
+        ctxV.arc(cx, cy, radio + 10, 0, Math.PI * 2);
+        ctxV.fillStyle = 'rgba(10, 15, 20, 0.3)';
+        ctxV.fill();
+        ctxV.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        ctxV.lineWidth = 2;
+        ctxV.stroke();
+
+        // Arco exterior
+        ctxV.beginPath();
+        ctxV.arc(cx, cy, radio, angInicio, angFin);
+        ctxV.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+        ctxV.lineWidth = 16;
+        ctxV.stroke();
+
+        // Arco de color
+        const grad = ctxV.createLinearGradient(0, 0, W, H);
+        if (dispSpeed > limit) {
+          grad.addColorStop(0, 'rgba(255, 77, 109, 0.8)');
+          grad.addColorStop(0.5, 'rgba(255, 30, 60, 0.9)');
+          grad.addColorStop(1, 'rgba(255, 77, 109, 0.8)');
+        } else if (dispSpeed > limit * 0.8) {
+          grad.addColorStop(0, 'rgba(255, 193, 7, 0.75)');
+          grad.addColorStop(0.5, 'rgba(255, 160, 0, 0.85)');
+          grad.addColorStop(1, 'rgba(255, 193, 7, 0.75)');
+        } else {
+          grad.addColorStop(0, 'rgba(0, 229, 176, 0.45)');
+          grad.addColorStop(0.5, 'rgba(0, 229, 176, 0.7)');
+          grad.addColorStop(1, 'rgba(0, 229, 176, 0.45)');
+        }
+
+        ctxV.beginPath();
+        ctxV.arc(cx, cy, radio, angInicio, angVel);
+        ctxV.strokeStyle = grad;
+        ctxV.lineWidth = 12;
+        ctxV.stroke();
+
+        // Marcas
+        ctxV.save();
+        ctxV.translate(cx, cy);
+        for (let i = 0; i <= 10; i++) {
+          const frac = i / 10;
+          const ang = angInicio + frac * angTotal;
+          const val = Math.round(frac * escalaMax);
+          ctxV.beginPath();
+          ctxV.moveTo(Math.cos(ang) * (radio - 14), Math.sin(ang) * (radio - 14));
+          ctxV.lineTo(Math.cos(ang) * (radio + 2), Math.sin(ang) * (radio + 2));
+          ctxV.strokeStyle = val > limit ? 'rgba(255,77,109,0.7)' : 'rgba(255,255,255,0.35)';
+          ctxV.lineWidth = 1.3;
+          ctxV.stroke();
+          ctxV.fillStyle = 'rgba(255,255,255,0.65)';
+          ctxV.font = 'bold 8px "DM Sans"';
+          ctxV.textAlign = 'center';
+          ctxV.textBaseline = 'middle';
+          ctxV.fillText(val, Math.cos(ang) * (radio - 30), Math.sin(ang) * (radio - 30));
+        }
+        ctxV.restore();
+
+        // Aguja
+        ctxV.save();
+        ctxV.translate(cx, cy);
+        ctxV.rotate(angVel);
+        ctxV.shadowColor = dispSpeed > limit ? 'rgba(255,77,109,0.7)' : 'rgba(0,229,176,0.5)';
+        ctxV.shadowBlur = 8;
+        ctxV.beginPath();
+        ctxV.moveTo(-3, 5);
+        ctxV.lineTo(0, -radio + 18);
+        ctxV.lineTo(3, 5);
+        ctxV.closePath();
+        ctxV.fillStyle = dispSpeed > limit ? '#ff4d6d' : '#00e5b0';
+        ctxV.fill();
+        ctxV.shadowBlur = 0;
+        ctxV.restore();
+
+        // Centro
+        ctxV.beginPath();
+        ctxV.arc(cx, cy, 9, 0, Math.PI * 2);
+        ctxV.fillStyle = 'rgba(0,0,0,0.55)';
+        ctxV.fill();
+        ctxV.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctxV.lineWidth = 2;
+        ctxV.stroke();
+
+        // Número central
+        ctxV.fillStyle = dispSpeed > limit ? '#ff4d6d' : '#fff';
+        ctxV.font = 'bold 40px "Syne"';
+        ctxV.textAlign = 'center';
+        ctxV.textBaseline = 'middle';
+        ctxV.shadowColor = 'rgba(0,0,0,0.5)';
+        ctxV.shadowBlur = 6;
+        ctxV.fillText(Math.round(dispSpeed), cx, cy - 6);
+        ctxV.fillStyle = 'rgba(255,255,255,0.55)';
+        ctxV.font = 'bold 13px "DM Sans"';
+        ctxV.fillText(speedUnit, cx, cy + 26);
+        ctxV.shadowBlur = 0;
+        ctxV.fillStyle = 'rgba(255,255,255,0.3)';
+        ctxV.font = 'bold 7px "DM Sans"';
+        ctxV.fillText('MAX ' + Math.round(limit), cx, cy + 42);
+      }
+
+      // ============ TACÓMETRO DIGITAL (HORIZONTAL) ============
+      function actualizarTacometroDigital() {
+        const dispSpeed = speedUnit === 'km/h' ? currentSpeed : currentSpeed * 0.621371;
+        const limit = speedUnit === 'km/h' ? CONFIG.maxSpeed : CONFIG.maxSpeed * 0.621371;
+        
+        const speedEl = document.getElementById('speedDisplayH');
+        speedEl.textContent = Math.round(dispSpeed);
+        speedEl.classList.remove('warn', 'danger');
+        if (dispSpeed > limit * 0.85 && dispSpeed <= limit) speedEl.classList.add('warn');
+        else if (dispSpeed > limit) speedEl.classList.add('danger');
+        
+        document.getElementById('unitDisplayH').textContent = speedUnit;
+        document.getElementById('gpsStatusH').textContent = gpsOk ? '● GPS ACTIVO' : '● SIN SEÑAL';
+        document.getElementById('gpsStatusH').className = 'tacho-digital-gps' + (gpsOk ? '' : ' off');
+        document.querySelector('.tacho-digital-limit').textContent = 'MAX ' + Math.round(limit);
+      }
+
+      // ============ MAPA SATÉLITE ============
+      const map = L.map('map', {
+        zoomControl: false,
+        attributionControl: false
+      }).setView([19.4326, -99.1332], 17);
+
+      // Capa SATÉLITE de ESRI
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 19
+      }).addTo(map);
+
+      const marker = L.circleMarker([19.4326, -99.1332], {
+        radius: 8,
+        fillColor: '#00e5b0',
+        color: '#fff',
+        weight: 3,
+        fillOpacity: 1
+      }).addTo(map);
+
+      let pathLine;
+
+      // ============ GPS ============
+      async function getAddress(lat, lon) {
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&accept-language=es`);
+          const d = await r.json();
+          if (d?.address) {
+            const a = d.address;
+            const parts = [];
+            if (a.road || a.pedestrian) parts.push(a.road || a.pedestrian);
+            if (a.suburb || a.neighbourhood) parts.push(a.suburb || a.neighbourhood);
+            if (a.city || a.town || a.village) parts.push(a.city || a.town || a.village);
+            document.getElementById('streetDisplay').textContent = parts.join(', ') || 'Ubicación';
+          }
+        } catch(e) {}
+      }
+
+      function handlePosition(pos) {
+        const { latitude, longitude, speed } = pos.coords;
+        gpsOk = true;
+        lastPosition = { lat: latitude, lon: longitude, ts: Date.now() };
+        pathHistory.push(lastPosition);
+        if (pathHistory.length > 200) pathHistory.shift();
+
+        if (speed !== null && speed >= 0) {
+          currentSpeed = speed * 3.6;
+          if (currentSpeed > maxSpeedReached) maxSpeedReached = currentSpeed;
+        }
+
+        updateUI();
+        marker.setLatLng([latitude, longitude]);
+        if (pathLine) pathLine.addLatLng([latitude, longitude]);
+        else if (pathHistory.length > 1) {
+          pathLine = L.polyline(pathHistory.map(p => [p.lat, p.lon]), {
+            color: '#00e5b0', weight: 2, opacity: 0.5
+          }).addTo(map);
+        }
+        map.panTo([latitude, longitude], { animate: true, duration: 0.5 });
+        getAddress(latitude, longitude);
+        checkAlerts();
+        dibujarTacometroCircular();
+        actualizarTacometroDigital();
+      }
+
+      function handleError() {
+        gpsOk = false;
+        updateUI();
+        dibujarTacometroCircular();
+        actualizarTacometroDigital();
+      }
+
+      // ============ ALERTAS ============
+      function checkAlerts() {
+        const dispSpeed = speedUnit === 'km/h' ? currentSpeed : currentSpeed * 0.621371;
+        const limit = speedUnit === 'km/h' ? CONFIG.maxSpeed : CONFIG.maxSpeed * 0.621371;
+
+        const speedAlertV = document.getElementById('speedAlertV');
+        const speedAlertH = document.getElementById('speedAlertH');
+        const stopAlertV = document.getElementById('stopAlertV');
+        const stopAlertH = document.getElementById('stopAlertH');
+
+        if (dispSpeed > limit && !speedAlertActive) {
+          speedAlertActive = true;
+          speedAlertV.classList.add('show');
+          speedAlertH.classList.add('show');
+          if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+        } else if (dispSpeed <= limit && speedAlertActive) {
+          speedAlertActive = false;
+          speedAlertV.classList.remove('show');
+          speedAlertH.classList.remove('show');
+        }
+
+        if (currentSpeed < 1 && gpsOk) {
+          if (!stopStart) stopStart = Date.now();
+          const min = Math.floor((Date.now() - stopStart) / 60000);
+          if (min >= CONFIG.stopMinutes && !stopSent) {
+            stopSent = true;
+            stopAlertV.classList.add('show');
+            stopAlertH.classList.add('show');
+          }
+        } else if (currentSpeed > 1) {
+          stopStart = null;
+          stopSent = false;
+          stopAlertV.classList.remove('show');
+          stopAlertH.classList.remove('show');
+        }
+      }
+
+      function updateUI() {
+        document.getElementById('coordDisplay').textContent = lastPosition
+          ? `${lastPosition.lat.toFixed(6)}, ${lastPosition.lon.toFixed(6)}`
+          : '';
+      }
+
+      // ============ WHATSAPP ============
+      function openWhatsApp(phone) {
+        const num = phone.replace(/\+/g, '').replace(/\s/g, '');
+        document.getElementById('waFrame').src = `https://web.whatsapp.com/send?phone=${num}`;
+        document.getElementById('waOverlay').classList.add('show');
+      }
+
+      // ============ QR ============
+      function showQR() {
+        if (!lastPosition) return;
+        const lat = lastPosition.lat.toFixed(6);
+        const lon = lastPosition.lon.toFixed(6);
+        document.getElementById('qrCode').innerHTML = '';
+        new QRCode(document.getElementById('qrCode'), {
+          text: `https://www.google.com/maps?q=${lat},${lon}`,
+          width: 160, height: 160,
+          colorDark: '#1a232d', colorLight: '#ffffff'
+        });
+        document.getElementById('qrCoords').textContent = `${lat}, ${lon}`;
+        document.getElementById('qrOverlay').classList.add('show');
+      }
+
+      // ============ EVENTOS ============
+      document.getElementById('btnFamily').addEventListener('click', () => openWhatsApp(CONFIG.familiaPhone));
+      document.getElementById('btnEmpresa').addEventListener('click', () => openWhatsApp(CONFIG.empresaPhone));
+      document.getElementById('btnEmergencia').addEventListener('click', () => {
+        if (confirm('¿Activar protocolo de emergencia?')) window.open(`tel:${CONFIG.emergenciaPhone}`);
+      });
+      document.getElementById('btnQR').addEventListener('click', showQR);
+      document.getElementById('btnCloseQR').addEventListener('click', () => {
+        document.getElementById('qrOverlay').classList.remove('show');
+      });
+      document.getElementById('btnCloseWA').addEventListener('click', () => {
+        document.getElementById('waOverlay').classList.remove('show');
+        document.getElementById('waFrame').src = '';
+      });
+      document.getElementById('btnShareWA').addEventListener('click', () => {
+        if (!lastPosition) return;
+        window.open(`https://wa.me/?text=${encodeURIComponent('📍 Mi ubicación: https://www.google.com/maps?q=' + lastPosition.lat + ',' + lastPosition.lon)}`);
+      });
+      document.getElementById('btnShareSMS').addEventListener('click', () => {
+        if (!lastPosition) return;
+        window.open(`sms:?body=${encodeURIComponent('📍 Mi ubicación: https://www.google.com/maps?q=' + lastPosition.lat + ',' + lastPosition.lon)}`);
+      });
+      document.getElementById('btnUnit').addEventListener('click', function() {
+        speedUnit = speedUnit === 'km/h' ? 'mph' : 'km/h';
+        this.textContent = speedUnit === 'km/h' ? 'km/h ⇄ mph' : 'mph ⇄ km/h';
+        dibujarTacometroCircular();
+        actualizarTacometroDigital();
+      });
+      document.getElementById('btnCenter').addEventListener('click', () => {
+        if (lastPosition) map.setView([lastPosition.lat, lastPosition.lon], 17);
+      });
+      document.getElementById('qrOverlay').addEventListener('click', function(e) {
+        if (e.target === this) this.classList.remove('show');
+      });
+
+      // ============ INICIO ============
+      function startGPS() {
+        if (!navigator.geolocation) return;
+        navigator.geolocation.watchPosition(handlePosition, handleError, {
+          enableHighAccuracy: true, maximumAge: 2000, timeout: 10000
+        });
+      }
+
+      dibujarTacometroCircular();
+      actualizarTacometroDigital();
+      startGPS();
+
+      // Redibujar al cambiar orientación
+      window.addEventListener('orientationchange', () => {
+        setTimeout(() => {
+          dibujarTacometroCircular();
+          actualizarTacometroDigital();
+          if (lastPosition) map.setView([lastPosition.lat, lastPosition.lon], 17);
+        }, 300);
+      });
+    })();
+  </script>
+</body>
+</html>
