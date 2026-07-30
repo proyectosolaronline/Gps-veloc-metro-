@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>GPS Fullscreen - Velocímetro Digital + Mapa + SMS + Modo Nocturno</title>
+  
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', 'Roboto', system-ui, sans-serif;
+      background: #000;
+      height: 100vh;
+      overflow: hidden;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* MAPA FULLSCREEN */
+    .fullscreen-map {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+      background: #0a0a0a !important;
+    }
+
+    /* Filtro oscuro para modo noche */
+    .night-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.25);
+      transition: opacity 0.5s ease;
+    }
+
+    .night-overlay.active {
+      background: rgba(0, 0, 0, 0.45);
+    }
+
+    /* CAPA HUD */
+    .hud-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* Velocímetro digital */
+    .speed-digital-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 10px;
+      pointer-events: auto;
+    }
+
+    .speed-panel {
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 25px;
+      padding: 10px 24px;
+      text-align: center;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 8px 35px rgba(0, 0, 0, 0.5);
+      min-width: 150px;
+      transition: background 0.5s;
+    }
+
+    .night-mode .speed-panel {
+      background: rgba(0, 0, 0, 0.7);
+      border-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .speed-number {
+      font-size: 4.2rem;
+      font-weight: 800;
+      color: #ffffff;
+      text-shadow: 
+        0 0 25px rgba(52, 152, 219, 0.5),
+        0 0 50px rgba(52, 152, 219, 0.25);
+      line-height: 1;
+      letter-spacing: -2px;
+      transition: all 0.3s ease;
+    }
+
+    .night-mode .speed-number {
+      text-shadow: 
+        0 0 15px rgba(52, 152, 219, 0.3),
+        0 0 30px rgba(52, 152, 219, 0.15);
+      color: #e0e0e0;
+    }
+
+    .speed-number.warning {
+      color: #f39c12;
+      text-shadow: 0 0 25px rgba(243, 156, 18, 0.7);
+    }
+
+    .speed-number.danger {
+      color: #e74c3c;
+      text-shadow: 0 0 30px rgba(231, 76, 60, 0.8);
+      animation: pulseDanger 0.7s infinite;
+    }
+
+    @keyframes pulseDanger {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.06); }
+    }
+
+    .speed-unit {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #bdc3c7;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-top: 1px;
+    }
+
+    .speed-status {
+      font-size: 0.55rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      margin-top: 2px;
+      color: #2ecc71;
+    }
+
+    .speed-status.offline {
+      color: #e74c3c;
+    }
+
+    /* Alertas */
+    .alerts-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 5px;
+      pointer-events: auto;
+      width: 90%;
+      max-width: 300px;
+    }
+
+    .alert-banner {
+      background: rgba(231, 76, 60, 0.8);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 6px 12px;
+      border-radius: 10px;
+      color: white;
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-align: center;
+      display: none;
+      border: 1px solid rgba(255,255,255,0.15);
+      animation: slideIn 0.3s ease;
+    }
+
+    .alert-banner.visible {
+      display: block;
+    }
+
+    .alert-banner.stop-type {
+      background: rgba(243, 156, 18, 0.8);
+    }
+
+    @keyframes slideIn {
+      from { transform: translateY(-10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* Panel coordenadas al tocar */
+    .coord-popup {
+      position: fixed;
+      bottom: 110px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 16px;
+      padding: 12px 16px;
+      color: white;
+      display: none;
+      pointer-events: auto;
+      border: 1.5px solid #3498db;
+      text-align: center;
+      min-width: 250px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.7);
+    }
+
+    .coord-popup.visible {
+      display: block;
+      animation: popIn 0.25s ease;
+    }
+
+    @keyframes popIn {
+      from { transform: translateX(-50%) scale(0.9); opacity: 0; }
+      to { transform: translateX(-50%) scale(1); opacity: 1; }
+    }
+
+    .coord-title {
+      font-size: 0.65rem;
+      color: #3498db;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 5px;
+      font-weight: 700;
+    }
+
+    .coord-values {
+      font-family: 'Courier New', monospace;
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+      line-height: 1.4;
+    }
+
+    .coord-buttons {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn-share {
+      background: #27ae60;
+      border: none;
+      color: white;
+      padding: 7px 14px;
+      border-radius: 18px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.7rem;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: 0.2s;
+    }
+
+    .btn-share.sms-btn {
+      background: #2980b9;
+    }
+
+    .btn-share.whatsapp-btn {
+      background: #25D366;
+    }
+
+    .btn-share.copy-btn {
+      background: #7f8c8d;
+    }
+
+    .btn-share:hover {
+      filter: brightness(1.2);
+    }
+
+    .btn-share:active {
+      transform: scale(0.95);
+    }
+
+    /* Pie de página */
+    .map-footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      z-index: 10;
+      pointer-events: none;
+      padding: 0 0 8px 0;
+    }
+
+    .footer-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 6px 12px;
+    }
+
+    .transit-location {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: #ffffff;
+      text-shadow: 
+        0 0 12px rgba(0,0,0,0.95),
+        0 0 25px rgba(0,0,0,0.8),
+        0 2px 5px rgba(0,0,0,0.9);
+      text-align: center;
+      letter-spacing: 0.3px;
+      line-height: 1.3;
+      max-width: 90%;
+    }
+
+    .transit-coords {
+      font-size: 0.62rem;
+      font-weight: 500;
+      color: #ecf0f1;
+      text-shadow: 
+        0 0 8px rgba(0,0,0,0.9),
+        0 2px 4px rgba(0,0,0,0.7);
+      font-family: 'Courier New', monospace;
+      margin-top: 2px;
+    }
+
+    /* Botones flotantes */
+    .floating-btns {
+      position: fixed;
+      top: 8px;
+      right: 8px;
+      z-index: 20;
+      display: flex;
+      gap: 4px;
+      pointer-events: auto;
+    }
+
+    .float-btn {
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 16px;
+      cursor: pointer;
+      font-size: 0.6rem;
+      font-weight: 600;
+      transition: 0.2s;
+    }
+
+    .float-btn:hover {
+      background: rgba(231, 76, 60, 0.5);
+    }
+
+    .float-btn.night-btn {
+      font-size: 0.8rem;
+      padding: 6px 8px;
+    }
+
+    /* Botón compartir ubicación actual */
+    .share-current-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 15px;
+      z-index: 20;
+      pointer-events: auto;
+      background: rgba(39, 174, 96, 0.8);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: white;
+      width: 45px;
+      height: 45px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 1.3rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      transition: 0.2s;
+    }
+
+    .share-current-btn:active {
+      transform: scale(0.9);
+    }
+
+    /* Configuración */
+    .config-btn {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 20;
+      pointer-events: auto;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: white;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .modal-box {
+      background: #1a1a2e;
+      border: 1.5px solid #3498db;
+      border-radius: 18px;
+      padding: 18px;
+      width: 90%;
+      max-width: 330px;
+      color: white;
+      pointer-events: auto;
+    }
+
+    .modal-box h3 {
+      color: #3498db;
+      margin-bottom: 10px;
+      font-size: 1rem;
+    }
+
+    .modal-box label {
+      font-size: 0.65rem;
+      color: #95a5a6;
+      display: block;
+      margin-top: 8px;
+    }
+
+    .modal-box input {
+      width: 100%;
+      padding: 7px;
+      margin-top: 2px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      color: white;
+      font-size: 0.8rem;
+    }
+
+    .modal-box button {
+      margin-top: 10px;
+      padding: 8px;
+      border-radius: 16px;
+      cursor: pointer;
+      font-weight: 600;
+      border: none;
+      width: 100%;
+      font-size: 0.8rem;
+    }
+
+    .btn-save {
+      background: #3498db;
+      color: white;
+    }
+
+    .btn-close-modal {
+      background: rgba(231,76,60,0.3);
+      color: white;
+      margin-top: 4px;
+    }
+
+    @media (max-width: 480px) {
+      .speed-number {
+        font-size: 3.2rem;
+      }
+      .speed-panel {
+        padding: 8px 18px;
+      }
+      .transit-location {
+        font-size: 0.75rem;
+      }
+    }
+  </style>
+</head>
+<body class="">
+  <!-- MAPA -->
+  <div class="fullscreen-map">
+    <div id="map"></div>
+  </div>
+
+  <!-- Overlay noche -->
+  <div class="night-overlay" id="nightOverlay"></div>
+
+  <!-- HUD -->
+  <div class="hud-overlay">
+    <div class="speed-digital-container">
+      <div class="speed-panel" id="speedPanel">
+        <div class="speed-number" id="speedDisplay">0</div>
+        <div class="speed-unit" id="unitDisplay">km/h</div>
+        <div class="speed-status" id="gpsStatus">● GPS ACTIVO</div>
+      </div>
+      
+      <div class="alerts-stack">
+        <div class="alert-banner" id="speedAlert">🚨 EXCESO: <span id="speedAlertVal"></span></div>
+        <div class="alert-banner stop-type" id="stopAlert">⏰ DETENIDO: <span id="stopAlertVal"></span></div>
+      </div>
+    </div>
+
+    <div class="map-footer">
+      <div class="footer-content">
+        <div class="transit-location" id="transitLocation">Obteniendo ubicación...</div>
+        <div class="transit-coords" id="transitCoords"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Popup coordenadas -->
+  <div class="coord-popup" id="coordPopup">
+    <div class="coord-title">📍 Ubicación seleccionada</div>
+    <div class="coord-values" id="coordValues"></div>
+    <div class="coord-buttons">
+      <button class="btn-share sms-btn" id="smsBtn">📱 SMS</button>
+      <button class="btn-share whatsapp-btn" id="whatsappBtn">💬 WhatsApp</button>
+      <button class="btn-share copy-btn" id="copyBtn">📋 Copiar</button>
+    </div>
+  </div>
+
+  <!-- Botones -->
+  <button class="config-btn" id="configBtn">⚙️</button>
+  
+  <div class="floating-btns">
+    <button class="float-btn night-btn" id="nightModeBtn">🌙</button>
+    <button class="float-btn" data-alert="accidente">🚗</button>
+    <button class="float-btn" data-alert="obra">🚧</button>
+    <button class="float-btn" data-alert="policia">👮</button>
+    <button class="float-btn" data-alert="trafico">🚦</button>
+  </div>
+
+  <button class="share-current-btn" id="shareCurrentBtn" title="Compartir ubicación actual">📤</button>
+
+  <!-- Modal Config -->
+  <div class="modal-overlay" id="configModal">
+    <div class="modal-box">
+      <h3>⚙️ Configuración Monitoreo</h3>
+      <label>Velocidad máxima (km/h)</label>
+      <input type="number" id="maxSpeedCfg" value="80" min="10">
+      <label>Alerta detención (minutos)</label>
+      <input type="number" id="stopTimeCfg" value="10" min="1">
+      <label>Número SMS alertas (opcional)</label>
+      <input type="tel" id="smsNumberCfg" placeholder="+521234567890">
+      <label>Modo nocturno automático</label>
+      <input type="checkbox" id="autoNightCfg" checked style="width:auto;margin-top:5px;">
+      <button class="btn-save" id="saveCfgBtn">💾 Guardar</button>
+      <button class="btn-close-modal" id="closeCfgBtn">Cancelar</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    (function() {
+      // ============ STORAGE ============
+      const store = {
+        get(k, d=null) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch(e) { return d; } },
+        set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} }
+      };
+
+      // ============ ESTADO ============
+      let currentSpeed = 0;
+      let maxSpeedLimit = store.get('maxSpeedLimit', 80);
+      let stopTimeLimit = store.get('stopTimeLimit', 10);
+      let smsNumber = store.get('smsNumber', '');
+      let autoNight = store.get('autoNight', true);
+      let speedUnit = 'km/h';
+      let gpsOk = false;
+      let isOnline = navigator.onLine;
+      let lastPosition = store.get('lastPos', null);
+      let pathHistory = store.get('pathHistory', []);
+      let stopStartTime = null;
+      let stopAlertSent = false;
+      let speedAlertActive = false;
+      let isNightMode = false;
+      let nightLayer = null;
+      let dayLayer = null;
+
+      // ============ MAPA ============
+      let map, marker, pathLine;
+      let tappedCoords = null;
+
+      // Capas de mapa
+      const dayTiles = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      const nightTiles = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
+      function initMap() {
+        const start = lastPosition || { lat: 19.4326, lon: -99.1332 };
+        
+        map = L.map('map', {
+          zoomControl: false,
+          attributionControl: false,
+          preferCanvas: true
+        }).setView([start.lat, start.lon], 17);
+
+        // Capa día
+        dayLayer = L.tileLayer(dayTiles, { maxZoom: 19 });
+        
+        // Capa noche
+        nightLayer = L.tileLayer(nightTiles, { maxZoom: 19 });
+
+        // Determinar modo inicial
+        checkNightMode();
+        applyMapMode();
+
+        // Marcador
+        marker = L.circleMarker([start.lat, start.lon], {
+          radius: 8,
+          fillColor: '#3498db',
+          color: '#fff',
+          weight: 3,
+          fillOpacity: 1
+        }).addTo(map);
+
+        // Ruta
+        if (pathHistory.length > 1) {
+          pathLine = L.polyline(
+            pathHistory.map(p => [p.lat, p.lon]),
+            { color: '#3498db', weight: 3, opacity: 0.6 }
+          ).addTo(map);
+        }
+
+        // Tap en mapa
+        map.on('click', (e) => {
+          tappedCoords = e.latlng;
+          showCoordPopup(tappedCoords.lat, tappedCoords.lng);
+        });
+      }
+
+      function applyMapMode() {
+        if (!map) return;
+        
+        if (isNightMode) {
+          map.removeLayer(dayLayer);
+          map.addLayer(nightLayer);
+          document.body.classList.add('night-mode');
+          document.getElementById('nightOverlay').classList.add('active');
+          document.getElementById('nightModeBtn').textContent = '☀️';
+        } else {
+          map.removeLayer(nightLayer);
+          map.addLayer(dayLayer);
+          document.body.classList.remove('night-mode');
+          document.getElementById('nightOverlay').classList.remove('active');
+          document.getElementById('nightModeBtn').textContent = '🌙';
+        }
+      }
+
+      function checkNightMode() {
+        if (autoNight) {
+          const hour = new Date().getHours();
+          isNightMode = (hour >= 19 || hour < 6);
+        }
+      }
+
+      function toggleNightMode() {
+        isNightMode = !isNightMode;
+        applyMapMode();
+      }
+
+      function updateMap(lat, lon) {
+        if (!map) return;
+        marker.setLatLng([lat, lon]);
+        if (pathLine) pathLine.addLatLng([lat, lon]);
+        map.panTo([lat, lon], { animate: true, duration: 0.5 });
+      }
+
+      // ============ POPUP COORDENADAS ============
+      function showCoordPopup(lat, lon) {
+        document.getElementById('coordValues').innerHTML = `
+          🌐 Lat: ${lat.toFixed(6)}<br>
+          🌐 Lon: ${lon.toFixed(6)}<br>
+          <a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" style="color:#3498db;font-size:0.7rem;">Ver en Google Maps</a>
+        `;
+        document.getElementById('coordPopup').classList.add('visible');
+        
+        // Configurar botones
+        document.getElementById('smsBtn').onclick = () => shareViaSMS(lat, lon);
+        document.getElementById('whatsappBtn').onclick = () => shareViaWhatsApp(lat, lon);
+        document.getElementById('copyBtn').onclick = () => copyCoords(lat, lon);
+        
+        // Auto-ocultar
+        clearTimeout(window._popupTimeout);
+        window._popupTimeout = setTimeout(() => {
+          document.getElementById('coordPopup').classList.remove('visible');
+        }, 15000);
+      }
+
+      function shareViaSMS(lat, lon) {
+        const msg = `📍 Mi ubicación:%0A%0A🌐 ${lat.toFixed(6)}, ${lon.toFixed(6)}%0A%0A🗺️ https://www.google.com/maps?q=${lat},${lon}%0A%0A🚗 Velocidad: ${Math.round(currentSpeed)} km/h%0A🕐 ${new Date().toLocaleString()}`;
+        window.open(`sms:${smsNumber}?body=${msg}`, '_blank');
+      }
+
+      function shareViaWhatsApp(lat, lon) {
+        const msg = `📍 *Mi ubicación:*%0A%0A🌐 ${lat.toFixed(6)}, ${lon.toFixed(6)}%0A%0A🗺️ https://www.google.com/maps?q=${lat},${lon}%0A%0A🚗 Velocidad: ${Math.round(currentSpeed)} km/h%0A🕐 ${new Date().toLocaleString()}`;
+        window.open(`https://wa.me/${smsNumber.replace(/\+/g,'')}?text=${msg}`, '_blank');
+      }
+
+      function copyCoords(lat, lon) {
+        const text = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+        navigator.clipboard?.writeText(text).then(() => {
+          const btn = document.getElementById('copyBtn');
+          btn.textContent = '✅ Copiado!';
+          setTimeout(() => { btn.textContent = '📋 Copiar'; }, 2000);
+        });
+      }
+
+      function shareCurrentLocation() {
+        if (!lastPosition) return;
+        showCoordPopup(lastPosition.lat, lastPosition.lon);
+      }
+
+      // ============ GEOLOCALIZACIÓN ============
+      async function getTransitLocation(lat, lon) {
+        const cached = store.get('cachedAddress', null);
+        try {
+          if (!navigator.onLine && cached) {
+            showLocation(cached, true);
+            return;
+          }
+          const resp = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&accept-language=es`,
+            { headers: { 'User-Agent': 'GPS-Monitor/4.0' } }
+          );
+          const data = await resp.json();
+          let address = '';
+          if (data?.address) {
+            const a = data.address;
+            const parts = [];
+            if (a.road || a.pedestrian) parts.push(a.road || a.pedestrian);
+            if (a.suburb || a.neighbourhood) parts.push(a.suburb || a.neighbourhood);
+            if (a.city || a.town || a.village) parts.push(a.city || a.town || a.village);
+            if (a.state) parts.push(a.state);
+            address = parts.join(', ') || data.display_name || 'Ubicación';
+          }
+          store.set('cachedAddress', address);
+          showLocation(address, false);
+        } catch(e) {
+          if (cached) showLocation(cached, true);
+        }
+      }
+
+      function showLocation(address, isCached) {
+        document.getElementById('transitLocation').textContent = 
+          (isCached ? '📦 ' : '') + address;
+        document.getElementById('transitCoords').textContent = lastPosition
+          ? `${lastPosition.lat.toFixed(6)}, ${lastPosition.lon.toFixed(6)}`
+          : '';
+      }
+
+      // ============ GPS ============
+      function handlePosition(pos) {
+        const { latitude, longitude, speed } = pos.coords;
+        gpsOk = true;
+        lastPosition = { lat: latitude, lon: longitude, timestamp: Date.now() };
+        store.set('lastPos', lastPosition);
+        
+        pathHistory.push(lastPosition);
+        if (pathHistory.length > 200) pathHistory.shift();
+        store.set('pathHistory', pathHistory);
+
+        if (speed !== null && speed >= 0) {
+          currentSpeed = speed * 3.6;
+        } else if (pathHistory.length >= 2) {
+          currentSpeed = estimateSpeed();
+        }
+
+        updateUI();
+        updateMap(latitude, longitude);
+        getTransitLocation(latitude, longitude);
+        checkAlerts();
+        checkNightMode();
+        applyMapMode();
+      }
+
+      function handleError() {
+        gpsOk = false;
+        if (lastPosition && pathHistory.length >= 2) {
+          currentSpeed = estimateSpeed();
+        }
+        updateUI();
+      }
+
+      function estimateSpeed() {
+        if (pathHistory.length < 2) return 0;
+        const a = pathHistory[pathHistory.length - 2];
+        const b = pathHistory[pathHistory.length - 1];
+        const dt = (b.timestamp - a.timestamp) / 1000;
+        if (dt <= 0 || dt > 30) return 0;
+        const R = 6371000;
+        const dLat = (b.lat - a.lat) * Math.PI / 180;
+        const dLon = (b.lon - a.lon) * Math.PI / 180;
+        const lat1 = a.lat * Math.PI / 180;
+        const lat2 = b.lat * Math.PI / 180;
+        const aa = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+        return Math.min((R * 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1-aa)) / dt) * 3.6, 200);
+      }
+
+      // ============ ALERTAS ============
+      function checkAlerts() {
+        const displaySpeed = speedUnit === 'km/h' ? currentSpeed : currentSpeed * 0.621371;
+        const limit = speedUnit === 'km/h' ? maxSpeedLimit : maxSpeedLimit * 0.621371;
+
+        // Exceso de velocidad
+        if (displaySpeed > limit && !speedAlertActive) {
+          speedAlertActive = true;
+          document.getElementById('speedAlertVal').textContent = 
+            `${Math.round(displaySpeed)} ${speedUnit} (max ${Math.round(limit)})`;
+          document.getElementById('speedAlert').classList.add('visible');
+          document.getElementById('speedDisplay').classList.add('danger');
+          if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+          
+          // Auto SMS de alerta
+          if (smsNumber) {
+            const msg = `🚨 ALERTA VELOCIDAD%0A%0A📍 ${document.getElementById('transitLocation').textContent}%0A🚗 ${Math.round(displaySpeed)} ${speedUnit}%0A🕐 ${new Date().toLocaleString()}`;
+            window.open(`sms:${smsNumber}?body=${msg}`, '_blank');
+          }
+        } else if (displaySpeed <= limit && speedAlertActive) {
+          speedAlertActive = false;
+          document.getElementById('speedAlert').classList.remove('visible');
+          document.getElementById('speedDisplay').classList.remove('danger');
+        }
+
+        // Detención
+        const now = Date.now();
+        if (currentSpeed < 1 && gpsOk) {
+          if (!stopStartTime) stopStartTime = now;
+          const min = Math.floor((now - stopStartTime) / 60000);
+          if (min >= stopTimeLimit && !stopAlertSent) {
+            stopAlertSent = true;
+            document.getElementById('stopAlertVal').textContent = `${min} min`;
+            document.getElementById('stopAlert').classList.add('visible');
+            if (navigator.vibrate) navigator.vibrate(1000);
+            
+            if (smsNumber) {
+              const msg = `⏰ VEHÍCULO DETENIDO%0A%0A📍 ${document.getElementById('transitLocation').textContent}%0A⏱️ ${min} minutos%0A🕐 ${new Date().toLocaleString()}`;
+              window.open(`sms:${smsNumber}?body=${msg}`, '_blank');
+            }
+          }
+        } else if (currentSpeed > 1) {
+          stopStartTime = null;
+          stopAlertSent = false;
+          document.getElementById('stopAlert').classList.remove('visible');
+        }
+      }
+
+      // ============ UI ============
+      function updateUI() {
+        const displaySpeed = speedUnit === 'km/h' ? currentSpeed : currentSpeed * 0.621371;
+        const speedEl = document.getElementById('speedDisplay');
+        speedEl.textContent = Math.round(displaySpeed);
+        
+        const limit = speedUnit === 'km/h' ? maxSpeedLimit : maxSpeedLimit * 0.621371;
+        speedEl.classList.remove('warning', 'danger');
+        if (displaySpeed > limit * 0.85 && displaySpeed <= limit) speedEl.classList.add('warning');
+        else if (displaySpeed > limit) speedEl.classList.add('danger');
+
+        document.getElementById('unitDisplay').textContent = speedUnit;
+        
+        const statusEl = document.getElementById('gpsStatus');
+        statusEl.textContent = gpsOk ? '● GPS ACTIVO' : '● SIN SEÑAL';
+        statusEl.className = 'speed-status' + (gpsOk ? '' : ' offline');
+      }
+
+      // ============ CONFIGURACIÓN ============
+      document.getElementById('configBtn').addEventListener('click', () => {
+        document.getElementById('maxSpeedCfg').value = maxSpeedLimit;
+        document.getElementById('stopTimeCfg').value = stopTimeLimit;
+        document.getElementById('smsNumberCfg').value = smsNumber;
+        document.getElementById('autoNightCfg').checked = autoNight;
+        document.getElementById('configModal').classList.add('show');
+      });
+
+      document.getElementById('closeCfgBtn').addEventListener('click', () => {
+        document.getElementById('configModal').classList.remove('show');
+      });
+
+      document.getElementById('saveCfgBtn').addEventListener('click', () => {
+        maxSpeedLimit = parseInt(document.getElementById('maxSpeedCfg').value) || 80;
+        stopTimeLimit = parseInt(document.getElementById('stopTimeCfg').value) || 10;
+        smsNumber = document.getElementById('smsNumberCfg').value;
+        autoNight = document.getElementById('autoNightCfg').checked;
+        
+        store.set('maxSpeedLimit', maxSpeedLimit);
+        store.set('stopTimeLimit', stopTimeLimit);
+        store.set('smsNumber', smsNumber);
+        store.set('autoNight', autoNight);
+        
+        document.getElementById('configModal').classList.remove('show');
+        checkNightMode();
+        applyMapMode();
+        updateUI();
+      });
+
+      // ============ EVENTOS ============
+      document.getElementById('nightModeBtn').addEventListener('click', toggleNightMode);
+      document.getElementById('shareCurrentBtn').addEventListener('click', shareCurrentLocation);
+
+      document.querySelectorAll('.float-btn[data-alert]').forEach(btn => {
+        btn.addEventListener('click', function() {
+          if (!lastPosition) return;
+          const type = this.dataset.alert;
+          const alerts = store.get('userAlerts', []);
+          alerts.push({ type, lat: lastPosition.lat, lon: lastPosition.lon, time: Date.now() });
+          if (alerts.length > 50) alerts.shift();
+          store.set('userAlerts', alerts);
+          
+          // SMS automático de alerta
+          if (smsNumber) {
+            const icons = { accidente: '🚗', obra: '🚧', policia: '👮', trafico: '🚦' };
+            const msg = `${icons[type]||'⚠️'} ALERTA: ${type.toUpperCase()}%0A%0A📍 ${document.getElementById('transitLocation').textContent}%0A🌐 ${lastPosition.lat.toFixed(6)},${lastPosition.lon.toFixed(6)}%0A🕐 ${new Date().toLocaleString()}`;
+            window.open(`sms:${smsNumber}?body=${msg}`, '_blank');
+          }
+          
+          this.style.transform = 'scale(1.3)';
+          setTimeout(() => { this.style.transform = 'scale(1)'; }, 200);
+        });
+      });
+
+      // Cerrar popup al tocar fuera
+      document.addEventListener('click', (e) => {
+        const popup = document.getElementById('coordPopup');
+        if (popup.classList.contains('visible') && 
+            !popup.contains(e.target) && 
+            !e.target.closest('.share-current-btn')) {
+          popup.classList.remove('visible');
+        }
+      });
+
+      window.addEventListener('online', () => { isOnline = true; updateUI(); });
+      window.addEventListener('offline', () => { isOnline = false; updateUI(); });
+
+      // ============ INICIO ============
+      function startGPS() {
+        if (!navigator.geolocation) return;
+        navigator.geolocation.watchPosition(
+          handlePosition,
+          handleError,
+          { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+        );
+      }
+
+      function init() {
+        initMap();
+        updateUI();
+        startGPS();
+        
+        if (lastPosition) {
+          getTransitLocation(lastPosition.lat, lastPosition.lon);
+        }
+
+        // Actualizar modo noche cada minuto
+        setInterval(() => {
+          if (autoNight) {
+            const wasNight = isNightMode;
+            checkNightMode();
+            if (wasNight !== isNightMode) applyMapMode();
+          }
+        }, 60000);
+      }
+
+      window.addEventListener('load', init);
+    })();
+  </script>
+</body>
+</html>
